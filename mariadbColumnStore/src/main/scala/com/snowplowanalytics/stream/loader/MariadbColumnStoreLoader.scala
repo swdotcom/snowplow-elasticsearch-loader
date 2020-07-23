@@ -39,8 +39,8 @@ object MariadbColumnStoreLoader {
     val badSink                    = initBadSink(config)
     val bulkSender                 = MariadbColumnStoreBulkSender(config, tracker)
     val goodSink = config.sink.good match {
-      case GoodSink.Stdout             => Some(new sinks.StdouterrSink)
-      case GoodSink.MariadbColumnStore => None
+      case GoodSink.Stdout        => Some(new sinks.StdouterrSink)
+      case GoodSink.Elasticsearch => None
     }
 
     val executor = initExecutor(config, bulkSender, goodSink, badSink, tracker)
