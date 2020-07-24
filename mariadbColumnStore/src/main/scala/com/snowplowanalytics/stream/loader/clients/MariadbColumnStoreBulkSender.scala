@@ -45,8 +45,8 @@ import scala.collection.JavaConverters._
 
 import cats.Id
 import cats.effect.{IO, Timer}
-// import cats.data.Validated
-// import cats.syntax.validated._
+import cats.data.Validated
+import cats.syntax.validated._
 
 // import retry.implicits._
 import retry.{RetryDetails, RetryPolicy}
@@ -63,7 +63,7 @@ class MariadbColumnStoreBulkSender(
   database: String,
   table: String,
   // mapping_file: String,
-  // columnstore_file: String,
+  columnstore_xml: String,
   // delimiter: String,
   // date_format: String,
   // enclose_by_character: String,
@@ -87,24 +87,32 @@ class MariadbColumnStoreBulkSender(
   override val log = LoggerFactory.getLogger(getClass)
 
   private val client = {
-    new ColumnStoreDriver()
+    new ColumnStoreDriver(columnstore_xml)
   }
 
   override def close(): Unit =
     log.info("Closing MariaDB ColumnStore BulkSender")
 
   override def send(records: List[EmitterJsonInput]): List[EmitterJsonInput] = {
+    log.info("MariaDB ColumnStore send")
+    log.info("records: {}", records);
     val connectionAttemptStartTime = System.currentTimeMillis()
     implicit def onErrorHandler: (Throwable, RetryDetails) => IO[Unit] =
       BulkSender.onError(log, tracker, connectionAttemptStartTime)
     implicit def retryPolicy: RetryPolicy[IO] =
       BulkSender.delayPolicy[IO](maxAttempts, maxConnectionWaitTimeMs)
 
+    // oldFailures - failed at the transformation step
+    val (successes, oldFailures) = records.partition(_._2.isValid)
+    val jsonObjects = successes.collect {
+      case (_, Validated.Valid(jsonRecord)) => jsonRecord
+    }
     val bulkInsertSummary: Try[ColumnStoreSummary] = Try {
       val bulkInsert: ColumnStoreBulkInsert = client.createBulkInsert(database, table, 0: Short, 0)
-      records.asJava.forEach { record =>
-        // bulkInsert.setColumn(0, record)
-        bulkInsert.setColumn(0, "record")
+
+      jsonObjects.asJava.forEach { jsonObject =>
+        log.info("jsonObject json: {}", jsonObject.json)
+        bulkInsert.setColumn(0, jsonObject.json.noSpaces)
         bulkInsert.writeRow()
       }
       bulkInsert.commit()
@@ -113,21 +121,17 @@ class MariadbColumnStoreBulkSender(
     }
 
     bulkInsertSummary match {
-      case SSuccess(v) =>
-        println("Success: " + v)
+      case SSuccess(summary) =>
+        println("Success: " + summary)
+        println("Execution time: " + summary.getExecutionTime());
+        println("Rows inserted: " + summary.getRowsInsertedCount());
+        println("Truncation count: " + summary.getTruncationCount());
+        println("Saturated count: " + summary.getSaturatedCount());
+        println("Invalid count: " + summary.getInvalidCount());
       case SFailure(e) =>
+        client.clearTableLock(database, table)
         println("Failure: " + e)
     }
-
-    // oldFailures - failed at the transformation step
-    val (successes, oldFailures) = records.partition(_._2.isValid)
-    // val esObjects = successes.collect {
-    //   case (_, Validated.Valid(jsonRecord)) => composeObject(jsonRecord)
-    // }
-    // val actions = esObjects.map(composeRequest)
-
-    // temp
-    oldFailures
 
     // Sublist of records that could not be inserted
     // val newFailures: List[EmitterJsonInput] = if (actions.nonEmpty) {
@@ -156,6 +160,7 @@ class MariadbColumnStoreBulkSender(
     // if (allFailures.nonEmpty) log.warn(s"Returning ${allFailures.size} records as failed")
 
     // allFailures
+    oldFailures
   }
 
   /**
@@ -173,19 +178,6 @@ class MariadbColumnStoreBulkSender(
   //     }
   //     .toList
 
-  // def composeObject(jsonRecord: JsonRecord): ElasticsearchObject = {
-  //   val index = jsonRecord.shard match {
-  //     case Some(shardSuffix) => documentIndex + shardSuffix
-  //     case None              => documentIndex
-  //   }
-  //   utils.extractEventId(jsonRecord.json) match {
-  //     case Some(id) =>
-  //       new ElasticsearchObject(index, documentType, id, jsonRecord.json.noSpaces)
-  //     case None =>
-  //       new ElasticsearchObject(index, documentType, jsonRecord.json.noSpaces)
-  //   }
-  // }
-
   /** Logs the cluster health */
   override def logHealth(): Unit = log.info("Cluster health is green")
   // client.execute(clusterHealth).onComplete {
@@ -199,29 +191,6 @@ class MariadbColumnStoreBulkSender(
   //         }
   //     }
   //   case SFailure(e) => log.error("Couldn't retrieve cluster health", e)
-  // }
-
-  /**
-   * Handle the response given for a bulk request, by producing a failure if we failed to insert
-   * a given item.
-   * @param error possible error
-   * @param record associated to this item
-   * @return a failure if an unforeseen error happened (e.g. not that the document already exists)
-   */
-  // private def handleResponse(
-  //   error: Option[String],
-  //   record: EmitterJsonInput): Option[EmitterJsonInput] = {
-  //   error.foreach(e => log.error(s"Record [$record] failed with message $e"))
-  //   error
-  //     .flatMap { e =>
-  //       if (e.contains("DocumentAlreadyExistsException") || e.contains(
-  //           "VersionConflictEngineException"))
-  //         None
-  //       else
-  //         Some(
-  //           record._1.take(maxSizeWhenReportingFailure) ->
-  //             s"Elasticsearch rejected record with message $e".invalidNel)
-  //     }
   // }
 }
 
@@ -240,7 +209,7 @@ object MariadbColumnStoreBulkSender {
       config.mariadb_columnstore.client.database,
       config.mariadb_columnstore.client.table,
       // config.mariadb_columnstore.client.mapping_file,
-      // config.mariadb_columnstore.client.columnstore_file,
+      config.mariadb_columnstore.client.columnstore_xml,
       // config.mariadb_columnstore.client.delimiter,
       // config.mariadb_columnstore.client.date_format,
       // config.mariadb_columnstore.client.enclose_by_character,

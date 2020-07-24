@@ -46,7 +46,9 @@ class StdinExecutor(
       f => badSink.store(EsLoaderBadRow(line, f).toCompactJson, None, false),
       s =>
         goodSink match {
-          case Some(gs) => gs.store(s.json.toString, None, true)
+          // case Some(gs) => gs.store(s.json.toString, None, true)
+          // Send good sink data to sender(MariaDB ColumnStore)
+          case Some(gs) => sender.send(List(ln -> s.valid))
           case None     => sender.send(List(ln -> s.valid))
       }
     )

@@ -118,7 +118,7 @@ object Config {
     database: String,
     table: String,
     // mapping_file: String,
-    // columnstore_file: String,
+    columnstore_xml: String,
     // delimiter: String,
     // date_format: String,
     // enclose_by_character: String,
