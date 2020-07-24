@@ -112,7 +112,13 @@ class MariadbColumnStoreBulkSender(
 
       jsonObjects.asJava.forEach { jsonObject =>
         log.info("jsonObject json: {}", jsonObject.json)
-        bulkInsert.setColumn(0, jsonObject.json.noSpaces)
+        utils.extractEventId(jsonObject.json) match {
+          case Some(id) =>
+            bulkInsert.setColumn(0, id)
+          case None =>
+            bulkInsert.setColumn(0, "")
+        }
+        bulkInsert.setColumn(1, jsonObject.json.noSpaces)
         bulkInsert.writeRow()
       }
       bulkInsert.commit()

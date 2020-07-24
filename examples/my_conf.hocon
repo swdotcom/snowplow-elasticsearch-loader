@@ -164,7 +164,7 @@ elasticsearch {
 mariadb_columnstore {
   client {
     database = "mcs"
-    table = "idbtest"
+    table = "events"
     columnstore_xml = "Columnstore.xml"
     maxTimeout = "30"
     maxRetries = 5
