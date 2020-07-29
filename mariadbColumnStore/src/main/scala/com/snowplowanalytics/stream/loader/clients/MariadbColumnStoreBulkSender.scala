@@ -29,19 +29,9 @@ import org.slf4j.LoggerFactory
 
 // Scala
 // import scala.concurrent.ExecutionContext.Implicits.global
+import scala.collection.mutable.ListBuffer
 import scala.util.{Try, Failure => SFailure, Success => SSuccess}
 import scala.collection.JavaConverters._
-
-// import org.elasticsearch.client.RestClient
-
-// import com.sksamuel.elastic4s.IndexAndType
-// import com.sksamuel.elastic4s.indexes.IndexRequest
-// import com.sksamuel.elastic4s.http.{ElasticClient, NoOpHttpClientConfigCallback, Response}
-// import com.sksamuel.elastic4s.http.ElasticDsl._
-// import com.sksamuel.elastic4s.http.bulk.BulkResponse
-
-// import org.apache.http.{Header, HttpHost}
-// import org.apache.http.message.BasicHeader
 
 import cats.Id
 import cats.effect.{IO, Timer}
@@ -104,40 +94,41 @@ class MariadbColumnStoreBulkSender(
 
     // oldFailures - failed at the transformation step
     val (successes, oldFailures) = records.partition(_._2.isValid)
-    val jsonObjects = successes.collect {
+    val jsonRecords = successes.collect {
       case (_, Validated.Valid(jsonRecord)) => jsonRecord
     }
-    val bulkInsertSummary: Try[ColumnStoreSummary] = Try {
-      val bulkInsert: ColumnStoreBulkInsert = client.createBulkInsert(database, table, 0: Short, 0)
+    // val bulkInsertSummary: Try[ColumnStoreSummary] = Try {
+    val bulkInsert: ColumnStoreBulkInsert = client.createBulkInsert(database, table, 0: Short, 0)
+    val newFailures = ListBuffer[EmitterJsonInput]()
 
-      jsonObjects.asJava.forEach { jsonObject =>
-        log.info("jsonObject json: {}", jsonObject.json)
-        utils.extractEventId(jsonObject.json) match {
+    jsonRecords.asJava.forEach { jsonRecord =>
+      try {
+        log.info("jsonRecord json: {}", jsonRecord.json)
+        utils.extractEventId(jsonRecord.json) match {
           case Some(id) =>
             bulkInsert.setColumn(0, id)
           case None =>
             bulkInsert.setColumn(0, "")
         }
-        bulkInsert.setColumn(1, jsonObject.json.noSpaces)
+        bulkInsert.setColumn(1, jsonRecord.json.noSpaces)
         bulkInsert.writeRow()
+      } catch {
+        case e: ColumnStoreException => {
+          log.error("Failure: {}" + e)
+          newFailures += e.getMessage -> jsonRecord.valid
+        }
       }
-      bulkInsert.commit()
-
-      bulkInsert.getSummary()
     }
+    bulkInsert.commit()
 
-    bulkInsertSummary match {
-      case SSuccess(summary) =>
-        println("Success: " + summary)
-        println("Execution time: " + summary.getExecutionTime());
-        println("Rows inserted: " + summary.getRowsInsertedCount());
-        println("Truncation count: " + summary.getTruncationCount());
-        println("Saturated count: " + summary.getSaturatedCount());
-        println("Invalid count: " + summary.getInvalidCount());
-      case SFailure(e) =>
-        client.clearTableLock(database, table)
-        println("Failure: " + e)
-    }
+    val summary: ColumnStoreSummary = bulkInsert.getSummary()
+    println("Success: " + summary)
+    println("Execution time: " + summary.getExecutionTime());
+    println("Rows inserted: " + summary.getRowsInsertedCount());
+    println("Truncation count: " + summary.getTruncationCount());
+    println("Saturated count: " + summary.getSaturatedCount());
+    println("Invalid count: " + summary.getInvalidCount());
+    log.info("newFailures: {}", newFailures)
 
     // Sublist of records that could not be inserted
     // val newFailures: List[EmitterJsonInput] = if (actions.nonEmpty) {
@@ -158,15 +149,14 @@ class MariadbColumnStoreBulkSender(
     //   }
     // } else Nil
 
-    // log.info(s"Emitted ${esObjects.size - newFailures.size} records to Elasticseacrch")
-    // if (newFailures.nonEmpty) logHealth()
+    log.info(s"Emitted ${jsonRecords.size - newFailures.size} records to MariaDB ColumnStore")
+    if (newFailures.nonEmpty) logHealth()
 
-    // val allFailures = oldFailures ++ newFailures
+    val allFailures = oldFailures ++ newFailures.toList
 
-    // if (allFailures.nonEmpty) log.warn(s"Returning ${allFailures.size} records as failed")
+    if (allFailures.nonEmpty) log.warn(s"Returning ${allFailures.size} records as failed")
 
-    // allFailures
-    oldFailures
+    allFailures
   }
 
   /**
@@ -185,7 +175,7 @@ class MariadbColumnStoreBulkSender(
   //     .toList
 
   /** Logs the cluster health */
-  override def logHealth(): Unit = log.info("Cluster health is green")
+  override def logHealth(): Unit = log.info("MariaDB ColumnStore health is green")
   // client.execute(clusterHealth).onComplete {
   //   case SSuccess(health) =>
   //     health match {
