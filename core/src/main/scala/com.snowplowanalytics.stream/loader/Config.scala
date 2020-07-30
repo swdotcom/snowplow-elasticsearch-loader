@@ -60,6 +60,7 @@ object Config {
   sealed trait GoodSink extends EnumEntry with EnumEntry.Hyphencase
   object GoodSink extends Enum[GoodSink] {
     case object Elasticsearch extends GoodSink
+    case object MariadbColumnStore extends GoodSink
     case object Stdout        extends GoodSink
 
     val values = findValues
@@ -118,7 +119,7 @@ object Config {
     database: String,
     table: String,
     // mapping_file: String,
-    columnstore_xml: String,
+    columnstore_xml: Option[String],
     // delimiter: String,
     // date_format: String,
     // enclose_by_character: String,

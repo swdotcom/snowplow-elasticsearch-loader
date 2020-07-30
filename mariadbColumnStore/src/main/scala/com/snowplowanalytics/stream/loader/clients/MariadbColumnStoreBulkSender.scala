@@ -20,7 +20,6 @@ package com.snowplowanalytics.stream.loader
 package clients
 
 // AWS
-// import com.amazonaws.services.kinesis.connectors.elasticsearch.ElasticsearchObject
 import com.amazonaws.auth.AWSCredentialsProvider
 
 // Java
@@ -28,9 +27,9 @@ import com.mariadb.columnstore.api._
 import org.slf4j.LoggerFactory
 
 // Scala
-// import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
 import scala.collection.mutable.ListBuffer
-import scala.util.{Try, Failure => SFailure, Success => SSuccess}
 import scala.collection.JavaConverters._
 
 import cats.Id
@@ -38,9 +37,9 @@ import cats.effect.{IO, Timer}
 import cats.data.Validated
 import cats.syntax.validated._
 
-// import retry.implicits._
+import retry.implicits._
 import retry.{RetryDetails, RetryPolicy}
-// import retry.CatsEffect._
+import retry.CatsEffect._
 
 import com.snowplowanalytics.snowplow.scalatracker.Tracker
 
@@ -53,7 +52,7 @@ class MariadbColumnStoreBulkSender(
   database: String,
   table: String,
   // mapping_file: String,
-  columnstore_xml: String,
+  columnstore_xml: Option[String],
   // delimiter: String,
   // date_format: String,
   // enclose_by_character: String,
@@ -76,8 +75,11 @@ class MariadbColumnStoreBulkSender(
 
   override val log = LoggerFactory.getLogger(getClass)
 
-  private val client = {
-    new ColumnStoreDriver(columnstore_xml)
+  private val client = columnstore_xml match {
+    case Some(xml) => new ColumnStoreDriver(xml)
+    // Use COLUMNSTORE_INSTALL_DIR environment variable and then the default
+    // default path of /etc/columnstore/Columnstore.xml to find a Columnstore.xml
+    case _         => new ColumnStoreDriver
   }
 
   override def close(): Unit =
@@ -97,9 +99,36 @@ class MariadbColumnStoreBulkSender(
     val jsonRecords = successes.collect {
       case (_, Validated.Valid(jsonRecord)) => jsonRecord
     }
-    // val bulkInsertSummary: Try[ColumnStoreSummary] = Try {
+
+    val newFailures: List[EmitterJsonInput] = BulkSender
+      .futureToTask(Future(writeRecords(jsonRecords)))
+      .retryingOnSomeErrors(BulkSender.exPredicate)
+      .attempt
+      .unsafeRunSync() match {
+        case Right(s) => s
+        case Left(f) =>
+          log.error(
+            s"Shutting down application as unable to connect to MariaDB ColumnStore for over $maxConnectionWaitTimeMs ms",
+            f)
+          // if the request failed more than it should have we force shutdown
+          forceShutdown()
+          Nil
+      }
+
+    log.info(s"Emitted ${jsonRecords.size - newFailures.size} records to MariaDB ColumnStore")
+    if (newFailures.nonEmpty) logHealth()
+
+    val allFailures = oldFailures ++ newFailures
+
+    if (allFailures.nonEmpty) log.warn(s"Returning ${allFailures.size} records as failed")
+
+    allFailures
+  }
+
+  def writeRecords(jsonRecords: List[JsonRecord]): List[EmitterJsonInput] = {
+    log.info("Creating BulkInsert")
     val bulkInsert: ColumnStoreBulkInsert = client.createBulkInsert(database, table, 0: Short, 0)
-    val newFailures = ListBuffer[EmitterJsonInput]()
+    val failures = ListBuffer[EmitterJsonInput]()
 
     jsonRecords.asJava.forEach { jsonRecord =>
       try {
@@ -115,87 +144,30 @@ class MariadbColumnStoreBulkSender(
       } catch {
         case e: ColumnStoreException => {
           log.error("Failure: {}" + e)
-          newFailures += e.getMessage -> jsonRecord.valid
+          failures += e.getMessage -> jsonRecord.valid
         }
       }
     }
     bulkInsert.commit()
 
     val summary: ColumnStoreSummary = bulkInsert.getSummary()
-    println("Success: " + summary)
-    println("Execution time: " + summary.getExecutionTime());
-    println("Rows inserted: " + summary.getRowsInsertedCount());
-    println("Truncation count: " + summary.getTruncationCount());
-    println("Saturated count: " + summary.getSaturatedCount());
-    println("Invalid count: " + summary.getInvalidCount());
-    log.info("newFailures: {}", newFailures)
+    log.info("Execution time: {}" + summary.getExecutionTime());
+    log.info("Rows inserted: {}" + summary.getRowsInsertedCount());
+    log.info("Truncation count: {}" + summary.getTruncationCount());
+    log.info("Saturated count: {}" + summary.getSaturatedCount());
+    log.info("Invalid count: {}" + summary.getInvalidCount());
+    log.info("newFailures: {}", failures)
 
-    // Sublist of records that could not be inserted
-    // val newFailures: List[EmitterJsonInput] = if (actions.nonEmpty) {
-    //   BulkSender
-    //     .futureToTask(client.execute(bulk(actions)))
-    //     .retryingOnSomeErrors(BulkSender.exPredicate)
-    //     .map(extractResult(records))
-    //     .attempt
-    //     .unsafeRunSync() match {
-    //     case Right(s) => s
-    //     case Left(f) =>
-    //       log.error(
-    //         s"Shutting down application as unable to connect to Elasticsearch for over $maxConnectionWaitTimeMs ms",
-    //         f)
-    //       // if the request failed more than it should have we force shutdown
-    //       forceShutdown()
-    //       Nil
-    //   }
-    // } else Nil
-
-    log.info(s"Emitted ${jsonRecords.size - newFailures.size} records to MariaDB ColumnStore")
-    if (newFailures.nonEmpty) logHealth()
-
-    val allFailures = oldFailures ++ newFailures.toList
-
-    if (allFailures.nonEmpty) log.warn(s"Returning ${allFailures.size} records as failed")
-
-    allFailures
+    failures.toList
   }
-
-  /**
-   * Get sublist of records that could not be inserted
-   * @param records list of original records to send
-   * @param response response with successful and failed results
-   */
-  // def extractResult(records: List[EmitterJsonInput])(
-  //   response: Response[BulkResponse]): List[EmitterJsonInput] =
-  //   response.result.items
-  //     .zip(records)
-  //     .flatMap {
-  //       case (bulkResponseItem, record) =>
-  //         handleResponse(bulkResponseItem.error.map(_.reason), record)
-  //     }
-  //     .toList
 
   /** Logs the cluster health */
   override def logHealth(): Unit = log.info("MariaDB ColumnStore health is green")
-  // client.execute(clusterHealth).onComplete {
-  //   case SSuccess(health) =>
-  //     health match {
-  //       case response =>
-  //         response.result.status match {
-  //           case "green"  => log.info("Cluster health is green")
-  //           case "yellow" => log.warn("Cluster health is yellow")
-  //           case "red"    => log.error("Cluster health is red")
-  //         }
-  //     }
-  //   case SFailure(e) => log.error("Couldn't retrieve cluster health", e)
-  // }
 }
 
 object MariadbColumnStoreBulkSender {
   implicit val ioTimer: Timer[IO] =
     IO.timer(concurrent.ExecutionContext.global)
-
-  // def composeRequest(obj: ElasticsearchObject): IndexRequest =
-  //   indexInto(IndexAndType(obj.getIndex, obj.getType)).id(obj.getId).doc(obj.getSource)
 
   def apply(
     config: StreamLoaderConfig,

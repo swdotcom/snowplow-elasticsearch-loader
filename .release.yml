@@ -39,4 +39,5 @@ packages:
         # The binaries to put in the zip
         binary_paths:
           - elasticsearch/target/scala-2.12/snowplow-elasticsearch-loader-<%= ENV['TRAVIS_TAG'] %>.jar
+          - elasticsearch/target/scala-2.12/snowplow-mariadb-columnstore-loader-<%= ENV['TRAVIS_TAG'] %>.jar
 
