@@ -39,8 +39,9 @@ object ElasticsearchLoader {
     val badSink                    = initBadSink(config)
     val bulkSender                 = ElasticsearchBulkSender(config, tracker)
     val goodSink = config.sink.good match {
-      case GoodSink.Stdout        => Some(new sinks.StdouterrSink)
-      case GoodSink.Elasticsearch => None
+      case GoodSink.Stdout             => Some(new sinks.StdouterrSink)
+      case GoodSink.Elasticsearch      => None
+      case GoodSink.MariadbColumnStore => None
     }
 
     val executor = initExecutor(config, bulkSender, goodSink, badSink, tracker)

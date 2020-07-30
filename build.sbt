@@ -87,9 +87,6 @@ lazy val mariadbColumnStore = project
   .enablePlugins(JavaAppPackaging)
   .settings(BuildSettings.dockerSettings)
   .settings(
-    libraryDependencies ++= Seq(
-      Dependencies.Libraries.elastic4sHttp,
-      Dependencies.Libraries.elastic4sTest
-    )
+    libraryDependencies ++= Seq()
   )
   .dependsOn(core)
