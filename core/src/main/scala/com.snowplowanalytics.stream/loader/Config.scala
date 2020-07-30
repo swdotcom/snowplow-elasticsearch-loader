@@ -114,6 +114,32 @@ object Config {
     buffer: BufferConfig
   )
 
+  case class MariadbColumnStoreClientConfig(
+    database: String,
+    table: String,
+    // mapping_file: String,
+    columnstore_xml: String,
+    // delimiter: String,
+    // date_format: String,
+    // enclose_by_character: String,
+    // escape_character: String,
+    // read_cache_size: Int,
+    // header: Boolean,
+    // ignore_malformed_csv: Boolean,
+    // err_log: String,
+    maxTimeout: Long,
+    maxRetries: Int
+  )
+
+  /**
+mcsimport database table input_file [-m mapping_file] [-c Columnstore.xml] [-d delimiter]
+[-n null_option] [-df date_format] [-default_non_mapped] [-E enclose_by_character]
+[-C escape_character] [-rc read_cache_size] [-header] [-ignore_malformed_csv] [-err_log]
+   */
+  case class MariadbColumnStoreConfig(
+    client: MariadbColumnStoreClientConfig,
+    aws: ESAWSConfig
+  )
   case class ESClientConfig(
     endpoint: String,
     port: Int,
@@ -162,6 +188,7 @@ object Config {
     queue: Queue,
     streams: StreamsConfig,
     elasticsearch: ESConfig,
+    mariadb_columnstore: MariadbColumnStoreConfig,
     monitoring: Option[MonitoringConfig])
 
   implicit def hint[T]: ProductHint[T]              = ProductHint[T](ConfigFieldMapping(CamelCase, CamelCase))

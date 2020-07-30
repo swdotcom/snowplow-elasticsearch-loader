@@ -59,7 +59,7 @@ lazy val allSettings = buildSettings ++
 lazy val root = project
   .in(file("."))
   .settings(buildSettings)
-  .aggregate(core, elasticsearch)
+  .aggregate(core, elasticsearch, mariadbColumnStore)
 
 lazy val core = project
   .settings(moduleName := "snowplow-elasticsearch-loader-core")
@@ -78,4 +78,18 @@ lazy val elasticsearch = project
       Dependencies.Libraries.elastic4sHttp,
       Dependencies.Libraries.elastic4sTest
     ))
+  .dependsOn(core)
+
+// project dealing with the MariaDB ColumnStore
+lazy val mariadbColumnStore = project
+  .settings(moduleName := "snowplow-mariadb-columnstore-loader")
+  .settings(allSettings)
+  .enablePlugins(JavaAppPackaging)
+  .settings(BuildSettings.dockerSettings)
+  .settings(
+    libraryDependencies ++= Seq(
+      Dependencies.Libraries.elastic4sHttp,
+      Dependencies.Libraries.elastic4sTest
+    )
+  )
   .dependsOn(core)
